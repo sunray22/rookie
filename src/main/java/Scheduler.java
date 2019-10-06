@@ -3,7 +3,9 @@ import items.ScanTest;
 import items.User;
 import util.DateRange;
 
-import java.util.*;
+import java.util.Calendar;
+import java.util.LinkedList;
+import java.util.ListIterator;
 
 public class Scheduler {
     private static final long A_DAY_IN_MILLISECONDS = 86400000;
@@ -12,8 +14,8 @@ public class Scheduler {
         Scheduler scheduler = new Scheduler();
 
         // get new Test instance
-        ScanTest newTest = SchedulerFactory.getScanTestInstanceWith(4, 6);
-        newTest.setPriority("High");
+        ScanTest newTest = SchedulerFactory.getScanTestInstanceWith(4, 5);
+        //newTest.setPriority("High");
 
         // get a Test user
         User user = SchedulerFactory.getUser();
@@ -31,7 +33,7 @@ public class Scheduler {
     }
 
     void scheduleScanTests(LinkedList<ScanTest> scanTestLinkedList, ScanTest newTest, DateRange sla) throws Exception {
-        if (newTest.getPriority().equalsIgnoreCase("HIGH")) {
+        if ("HIGH".equalsIgnoreCase(newTest.getPriority())) {
             assignFirstDatesOnlyOnPriority(scanTestLinkedList, newTest, sla.getEndDate());
         } else if (!assignFreeDates(scanTestLinkedList, newTest, sla.getEndDate())) {
             if (!assignTrailingDates(scanTestLinkedList, newTest, sla.getEndDate())) {
@@ -112,27 +114,58 @@ public class Scheduler {
             throw new Exception("Schedule Date exceeds SLA end date");
         }
 
+        int targetIndex = scanTestLinkedList.size();
+
         while (itr.hasNext()) {
+            ScanTest previous = itr.previous();
+            itr.next();// to traverse back to next
             ScanTest next = itr.next();
             Calendar sd = next.getTestDuration().getStarteDate();
             Calendar ed = next.getTestDuration().getEndDate();
-            int prevEndDate = itr.previous().getTestDuration().getEndDate().get(Calendar.DAY_OF_MONTH);
-            if((sd.get(Calendar.DAY_OF_MONTH) - prevEndDate) >= newTestDurationInDays) {
+            int prevEndDate = previous.getTestDuration().getEndDate().get(Calendar.DAY_OF_MONTH);
+            int previousIndex = itr.previousIndex();
+
+            if(isAssignable) { // after new test addition
+                sd.set(Calendar.DAY_OF_MONTH, sd.get(Calendar.DAY_OF_MONTH) + newTestDurationInDays.intValue());
+                ed.set(Calendar.DAY_OF_MONTH, ed.get(Calendar.DAY_OF_MONTH) + newTestDurationInDays.intValue());
+
+                if(isLicenseExceeded(ed, slaEndDate, newTestDurationInDays)) {
+                    throw new Exception("Schedule Date exceeds SLA end date");
+                }
+
+                continue;
+            }
+
+            if((sd.get(Calendar.DAY_OF_MONTH) - prevEndDate) - 1 >= newTestDurationInDays) {
                 startDate.set(Calendar.DAY_OF_MONTH, prevEndDate + 1);
                 endDate.set(Calendar.DAY_OF_MONTH, prevEndDate + newTestDurationInDays.intValue());
+                scanTestLinkedList.add(previousIndex, newTest);
                 isAssignable = true;
                 break;
             }
 
-            if(isLicenseExceeded(ed, slaEndDate, newTestDurationInDays)) {
-                throw new Exception("Schedule Date exceeds SLA end date");
+            if(isRangeOverlapping(next.getTestDuration(), newTest.getTestDuration())) { // overlaps
+                sd.set(Calendar.DAY_OF_MONTH, endDate.get(Calendar.DAY_OF_MONTH) + 1);
+                ed.set(Calendar.DAY_OF_MONTH, sd.get(Calendar.DAY_OF_MONTH) + noOfDays(next).intValue());
+                targetIndex = previousIndex;
+                isAssignable = true;// to avoid traversing back
             }
 
-            // to avoid traversing back
-            itr.next();
+            if(isLicenseExceeded(ed, slaEndDate, null)) {
+                throw new Exception("Schedule Date exceeds SLA end date");
+            }
         }
 
+        scanTestLinkedList.add(targetIndex, newTest);
+
         return isAssignable;
+    }
+
+    private boolean isRangeOverlapping(DateRange testDuration, DateRange newTestDuration) {
+        return (testDuration.getStarteDate().getTimeInMillis() <= newTestDuration.getStarteDate().getTimeInMillis()
+                && testDuration.getEndDate().getTimeInMillis() >= newTestDuration.getStarteDate().getTimeInMillis())
+                || (testDuration.getStarteDate().getTimeInMillis() <= newTestDuration.getEndDate().getTimeInMillis()
+                && testDuration.getEndDate().getTimeInMillis() >= newTestDuration.getEndDate().getTimeInMillis());
     }
 
     Long noOfDays(ScanTest test) {
@@ -145,7 +178,7 @@ public class Scheduler {
         }
         noOfDays = (endDate.getTimeInMillis() - startDate.getTimeInMillis())/A_DAY_IN_MILLISECONDS;
 
-        return noOfDays;
+        return noOfDays + 1l;
     }
 
     boolean isWeekend(Calendar aDate) {
@@ -160,6 +193,9 @@ public class Scheduler {
     }
 
     boolean isLicenseExceeded(Calendar testDate, Calendar slaEndDate,Long noOfDays) {
+        if (noOfDays == null) {
+            return testDate.getTimeInMillis() > slaEndDate.getTimeInMillis();
+        }
          Long noOfDaysRemaining= (slaEndDate.getTimeInMillis() - testDate.getTimeInMillis())/A_DAY_IN_MILLISECONDS;
         return noOfDays >= noOfDaysRemaining;
     }
